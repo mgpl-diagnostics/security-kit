@@ -1,0 +1,32 @@
+# @mgpl-diagnostics/security-kit
+
+> Security primitives for both sides of MGPL Diagnostics, with zero dependencies. The browser entry collects device signals (device id, tab id, coarse fingerprint, device info) in any frontend and sends them as the x-mgpl-signals header; the server entry validates them, binds them to a session (hashed ids) and checks later requests (same / changed / other-device / missing / unbound). The server entry also has clientIp behind proxies, security and CORS headers, and log redaction.
+
+Key facts for agents:
+- Entries: "." (shared: types, encode/decode, randomId, sha256Hex, constantTimeEqual), "./browser" (createSignalCollector, deviceInfo, storages), "./server" (readSignals, bindSignals, checkSignals, decide, clientIp, securityHeaders, corsPolicy, redact, maskEmail, maskPhone).
+- The shared and browser parts use no Node.js APIs (checked by typecheck and scripts/check-dist.mjs).
+- decodeSignals / readSignals never throw and return null for anything malformed or oversized.
+- Token and session logic stays in auth-kit; security-kit only supplies signals and helpers.
+
+## Docs
+
+- [README](README.md): entries, what is collected, use, verdicts, server helpers
+- [AGENTS.md](AGENTS.md): map and rules
+- [llms-full.txt](llms-full.txt): every doc and source file in one document
+
+## Source
+
+- [src/shared/signals.ts](src/shared/signals.ts): encode, decode and validate signals
+- [src/browser/collect.ts](src/browser/collect.ts): createSignalCollector
+- [src/browser/device.ts](src/browser/device.ts): device info and fingerprint inputs
+- [src/server/signals.ts](src/server/signals.ts): readSignals, bindSignals, checkSignals, decide
+- [src/server/ip.ts](src/server/ip.ts): clientIp
+- [src/server/headers.ts](src/server/headers.ts): securityHeaders, corsPolicy
+- [src/server/redact.ts](src/server/redact.ts): redact, maskEmail, maskPhone
+- [scripts/test.ts](scripts/test.ts): all checks
+
+## Optional
+
+- [auth-kit](https://github.com/mgpl-diagnostics/auth-kit)
+- [client](https://github.com/mgpl-diagnostics/client)
+- [api](https://github.com/mgpl-diagnostics/api)
