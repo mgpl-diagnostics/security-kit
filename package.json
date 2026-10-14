@@ -1,0 +1,53 @@
+{
+  "name": "@mgpl-diagnostics/security-kit",
+  "version": "0.1.0",
+  "description": "MGPL Diagnostics security primitives for both sides: device signals (device id, tab id, coarse fingerprint, device info) collected in any frontend and checked on the backend against the session; client IP behind proxies; security and CORS headers; log redaction; random ids, SHA-256 and constant-time compare. Zero dependencies.",
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": "github:mgpl-diagnostics/security-kit",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md",
+    "llms.txt",
+    "LICENSE",
+    "llms-full.txt"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.browser.json",
+    "test": "tsx scripts/test.ts",
+    "prepare": "tsup",
+    "llms": "node scripts/llms-full.mjs @mgpl-diagnostics/security-kit README.md AGENTS.md llms.txt package.json src scripts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsup": "^8.5.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
