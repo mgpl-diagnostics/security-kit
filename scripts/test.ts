@@ -416,6 +416,176 @@ await check("maskEmail and maskPhone", () => {
   eq(maskPhone(""), "");
 });
 
+// ---------- browser: subscribe / snapshot and library adapters ----------
+
+await check("collector subscribe/getSnapshot: first collect, refresh, reset, unsubscribe", async () => {
+  const c = collector(env(UA.chromeWin));
+  const seen: (DeviceSignals | null)[] = [];
+  const off = c.subscribe((s) => seen.push(s));
+  eq(c.getSnapshot(), null);
+  const a = await c.collect();
+  ok(c.getSnapshot() === a, "snapshot is the collected object");
+  await c.collect();
+  eq(seen.length, 1); // cached: no second notification
+  const b = await c.refresh();
+  ok(c.getSnapshot() === b && seen.length === 2);
+  await c.reset();
+  eq(c.getSnapshot(), null);
+  eq(seen.length, 3);
+  off();
+  await c.collect();
+  eq(seen.length, 3);
+});
+await check("collector: a refresh during a collect wins", async () => {
+  let lang = "en-IN";
+  const c = createSignalCollector({ storage: memoryStorage(), tabStorage: memoryStorage(), environment: () => env(UA.chromeWin, { language: lang }) });
+  const first = c.collect();
+  lang = "hi-IN";
+  const second = c.refresh();
+  await first;
+  eq((await second).device.language, "hi-IN");
+  eq(c.getSnapshot()?.device.language, "hi-IN");
+});
+
+const sk = await import("../src/browser/index");
+const recorded: { url: string; headers: Headers }[] = [];
+const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  recorded.push({ url: String(input instanceof Request ? input.url : input), headers: new Headers(init?.headers) });
+  return new Response("{}");
+};
+
+await check("signalFetch adds the header, keeps caller headers, never overwrites", async () => {
+  const c = collector(env(UA.chromeWin));
+  const f = sk.signalFetch(c, fakeFetch);
+  await f("https://api.example/graphql", { headers: { authorization: "Bearer t" } });
+  const h = recorded.at(-1)!.headers;
+  eq(decodeSignals(h.get(SIGNALS_HEADER)), await c.collect());
+  eq(h.get("authorization"), "Bearer t");
+  await f("https://api.example/graphql", { headers: { [SIGNALS_HEADER]: "mine" } });
+  eq(recorded.at(-1)!.headers.get(SIGNALS_HEADER), "mine");
+  await f(new Request("https://api.example/x", { headers: { "x-a": "1" } }));
+  eq(recorded.at(-1)!.headers.get("x-a"), "1");
+});
+await check("signalFetch still sends the request when collection fails", async () => {
+  const broken = createSignalCollector({ storage: { get: () => { throw new Error("blocked"); }, set: () => undefined }, tabStorage: memoryStorage(), environment: () => env(UA.chromeWin) });
+  const errors: unknown[] = [];
+  const res = await sk.signalFetch(broken, fakeFetch, { onError: (e) => errors.push(e) })("https://api.example/");
+  eq(res.status, 200);
+  eq(recorded.at(-1)!.headers.has(SIGNALS_HEADER), false);
+  eq(errors.length, 1);
+});
+await check("mergeSignalHeaders, apolloSignals, kySignals, axiosSignals", async () => {
+  const c = collector(env(UA.chromeWin));
+  const v = await c.headerValue();
+  eq(await sk.mergeSignalHeaders(c, { Authorization: "Bearer t" }), { authorization: "Bearer t", [SIGNALS_HEADER]: v });
+  eq((await sk.apolloSignals(c)({}, { headers: { authorization: "Bearer t" } })).headers[SIGNALS_HEADER], v);
+  const req = new Request("https://api.example/");
+  await sk.kySignals(c)(req);
+  eq(req.headers.get(SIGNALS_HEADER), v);
+  // axios 1.x passes an AxiosHeaders instance (set/has); older code passes plain objects
+  const store = new Map<string, string>();
+  const axiosHeaders = Object.assign(Object.create(null), { set: (k: string, x: string) => void store.set(k, x), has: (k: string) => store.has(k) });
+  await sk.axiosSignals(c)({ headers: axiosHeaders });
+  eq(store.get(SIGNALS_HEADER), v);
+  const plain = await sk.axiosSignals(c)({ headers: { accept: "json" } as Record<string, unknown> });
+  eq(plain.headers, { accept: "json", [SIGNALS_HEADER]: v });
+  eq((await sk.axiosSignals(c)({})).headers, { [SIGNALS_HEADER]: v });
+});
+await check("signalStore follows the Svelte store contract", async () => {
+  const c = collector(env(UA.chromeWin));
+  const seen: (DeviceSignals | null)[] = [];
+  const off = sk.signalStore(c).subscribe((s) => seen.push(s));
+  eq(seen, [null]); // called at once
+  await c.collect();
+  eq(seen.length, 2);
+  ok(seen[1] === c.getSnapshot());
+  off();
+});
+await check("our client SDK's headers option works directly", async () => {
+  const c = collector(env(UA.chromeWin));
+  // createMgplGraphQLClient({ headers: () => signals.headers() }) awaits a HeadersInit function
+  const headersOption: () => Promise<HeadersInit> = () => c.headers();
+  eq(new Headers(await headersOption()).has(SIGNALS_HEADER), true);
+});
+await check("React: useDeviceSignals renders null on the server and needs no provider", async () => {
+  const React = await import("react");
+  const { renderToString } = await import("react-dom/server");
+  const { useDeviceSignals } = await import("../src/react");
+  const c = collector(env(UA.chromeWin));
+  await c.collect();
+  const App = () => React.createElement("p", null, useDeviceSignals(c)?.device.os ?? "none");
+  eq(renderToString(React.createElement(App)), "<p>none</p>");
+});
+
+// ---------- server: framework adapters ----------
+
+const { expressSecurity, fastifySecurity, fetchSecurity, requestSecurity } = await import("../src/server/index");
+const sigValue = encodeSignals(good);
+
+await check("requestSecurity", () => {
+  const r = requestSecurity({ headers: { "x-mgpl-signals": sigValue, "user-agent": "UA", origin: "https://a.b" }, remoteAddress: "::ffff:10.1.1.1" });
+  eq(r, { ip: "10.1.1.1", signals: good, userAgent: "UA", origin: "https://a.b" });
+});
+await check("fetchSecurity: info, headers, preflight, apply", () => {
+  const sec = fetchSecurity({ cors: { origins: ["https://lab.example.in"] }, trustedHops: 1 });
+  const r = sec.handle(new Request("https://api/graphql", { method: "POST", headers: { origin: "https://lab.example.in", "x-forwarded-for": "203.0.113.9", [SIGNALS_HEADER]: sigValue } }), "10.0.0.2");
+  eq(r.security.ip, "203.0.113.9");
+  eq(r.security.signals, good);
+  eq(r.preflight, null);
+  eq(r.headers["access-control-allow-origin"], "https://lab.example.in");
+  eq(r.headers["x-content-type-options"], "nosniff");
+  const pre = sec.handle(new Request("https://api/graphql", { method: "OPTIONS", headers: { origin: "https://lab.example.in", "access-control-request-method": "POST" } }));
+  eq(pre.preflight?.status, 204);
+  ok(pre.preflight!.headers.get("access-control-allow-headers")!.includes(SIGNALS_HEADER));
+  const res = sec.apply(new Response("ok"), r.headers);
+  eq(res.headers.get("cache-control"), "no-store");
+  const immutable = sec.apply(Response.redirect("https://x.example/", 302), r.headers);
+  eq(immutable.headers.get("x-frame-options"), "DENY");
+});
+
+await check("expressSecurity on a real Express app", async () => {
+  const express = (await import("express")).default;
+  const app = express();
+  app.use(expressSecurity({ cors: { origins: ["https://lab.example.in"] } }));
+  app.post("/graphql", (req, res) => void res.json((req as unknown as { security: unknown }).security));
+  const server = app.listen(0);
+  await new Promise((r) => server.once("listening", r));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/graphql`, { method: "POST", headers: { origin: "https://lab.example.in", [SIGNALS_HEADER]: sigValue } });
+    const body = (await res.json()) as { ip: string; signals: DeviceSignals };
+    eq(body.signals, good);
+    eq(body.ip, "127.0.0.1");
+    eq(res.headers.get("access-control-allow-origin"), "https://lab.example.in");
+    eq(res.headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains");
+    const pre = await fetch(`http://127.0.0.1:${port}/graphql`, { method: "OPTIONS", headers: { origin: "https://lab.example.in", "access-control-request-method": "POST" } });
+    eq(pre.status, 204);
+    const evil = await fetch(`http://127.0.0.1:${port}/graphql`, { method: "POST", headers: { origin: "https://evil.example" } });
+    eq(evil.headers.get("access-control-allow-origin"), null);
+  } finally {
+    server.close();
+  }
+});
+await check("fastifySecurity on a real Fastify app (applies outside its plugin scope)", async () => {
+  const Fastify = (await import("fastify")).default;
+  const app = Fastify();
+  await app.register(fastifySecurity({ cors: { origins: ["https://*.mgpl.example"] }, headers: { hsts: false } }));
+  app.post("/graphql", async (req) => (req as unknown as { security: unknown }).security);
+  try {
+    const res = await app.inject({ method: "POST", url: "/graphql", headers: { origin: "https://panel.mgpl.example", [SIGNALS_HEADER]: sigValue }, payload: {} });
+    const body = res.json() as { signals: DeviceSignals; ip: string };
+    eq(body.signals, good);
+    eq(body.ip, "127.0.0.1");
+    eq(res.headers["access-control-allow-origin"], "https://panel.mgpl.example");
+    eq(res.headers["strict-transport-security"], undefined);
+    eq(res.headers["x-frame-options"], "DENY");
+    const pre = await app.inject({ method: "OPTIONS", url: "/graphql", headers: { origin: "https://panel.mgpl.example", "access-control-request-method": "POST" } });
+    eq(pre.statusCode, 204);
+  } finally {
+    await app.close();
+  }
+});
+
 console.log(`${passed} passed, ${failures.length} failed`);
 if (failures.length) {
   for (const f of failures) console.error(`  ✗ ${f}`);
