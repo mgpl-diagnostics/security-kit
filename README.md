@@ -6,7 +6,7 @@
 Device signals collected in any frontend and checked on the backend, plus the server helpers every
 endpoint needs. Zero dependencies.
 
-![version](https://img.shields.io/badge/version-0.2.0-E9A23B) ![checks](https://img.shields.io/badge/checks-44-14264A) ![dependencies](https://img.shields.io/badge/dependencies-0-14264A)
+![version](https://img.shields.io/badge/version-0.3.0-E9A23B) ![checks](https://img.shields.io/badge/checks-47-14264A) ![dependencies](https://img.shields.io/badge/dependencies-0-14264A)
 
 </div>
 
@@ -21,7 +21,7 @@ npm install @mgpl-diagnostics/security-kit
 | --- | --- | --- |
 | `@mgpl-diagnostics/security-kit` | everywhere (browser, Node.js, workers, React Native) | `DeviceSignals` types, `SIGNALS_HEADER`, `encodeSignals` / `decodeSignals` (validated), `randomId`, `sha256Hex`, `constantTimeEqual`, base64url, `canonicalJson` |
 | `@mgpl-diagnostics/security-kit/browser` | any frontend, any framework | `createSignalCollector`, `deviceInfo`, pluggable storage (`webStorage`, `memoryStorage`, or your own sync/async store) |
-| `@mgpl-diagnostics/security-kit/server` | Node.js ≥ 20 | `readSignals`, `bindSignals`, `checkSignals`, `decide`; `clientIp` behind proxies; `securityHeaders`, `corsPolicy`; `redact`, `maskEmail`, `maskPhone`; adapters for Express, Fastify and Fetch-standard servers |
+| `@mgpl-diagnostics/security-kit/server` | Node.js ≥ 20 | `readSignals`, `bindSignals`, `checkSignals`, `decide`; `clientIp` behind proxies; `readTlsFingerprint` (JA4/JA3 from the TLS proxy); `securityHeaders`, `corsPolicy`; `redact`, `maskEmail`, `maskPhone`; adapters for Express, Fastify and Fetch-standard servers |
 | `@mgpl-diagnostics/security-kit/react` | React ≥ 18 (optional peer) | `useDeviceSignals(collector)` |
 
 Both `/browser` and `/server` re-export the shared entry.
@@ -51,7 +51,7 @@ dependency, and anything not listed uses `collector.headers()` or `subscribe` / 
 | Fastify | `await app.register(fastifySecurity({ cors: { origins }, trustedHops: 1 }))` → `request.security` |
 | Express, Connect, node:http | `app.use(expressSecurity({ cors: { origins } }))` → `req.security` |
 | Hono, Next.js route handlers, Bun, Deno, workers, GraphQL Yoga | `fetchSecurity(opts).handle(request, remoteAddress)` → `{ security, headers, preflight }` |
-| anything else, or a GraphQL context | `requestSecurity({ headers, remoteAddress, trustedHops })` → `{ ip, signals, userAgent, origin }` |
+| anything else, or a GraphQL context | `requestSecurity({ headers, remoteAddress, trustedHops, tlsFingerprintHeader })` → `{ ip, signals, userAgent, origin, tlsFingerprint }` |
 
 `security.signals` is already validated (or `null`). Leave `cors` unset when another plugin
 (`@fastify/cors`, Yoga's own CORS) already handles it.
@@ -79,6 +79,7 @@ sequenceDiagram
 | `fingerprint` | SHA-256 (first 32 hex) of: OS, browser family, mobile, `navigator.platform`, language, time zone, screen size, colour depth, CPU cores, device memory, touch points | sent only |
 | `device` | OS, browser and major version, mobile, language, time zone, screen size | sent only |
 | `app` | the app's version, if the app sets one | sent only |
+| TLS fingerprint (server side) | JA4 or JA3 of the TLS ClientHello, computed by the TLS-terminating proxy, read by `readTlsFingerprint` | auth-kit stores a SHA-256 hash on the session |
 
 No canvas, audio, WebGL or font probing, no IP lookup, nothing sent to third parties. The browser version
 is left out of the fingerprint so updates don't change it. On the server, `bindSignals` stores
@@ -137,6 +138,39 @@ if (!allow) endSession();
 
 Signals are a second line of defence, not proof of identity: a determined attacker who steals a token can
 also copy the ids. They make silent token reuse from another browser visible and stoppable.
+
+## TLS fingerprint
+
+A TLS fingerprint (JA4, or the older JA3) describes the client's TLS library from its ClientHello: which
+ciphers, extensions and protocols it offers. No browser code can read it; whatever terminates TLS computes
+it. In production that is the reverse proxy, which passes it on in a request header:
+
+```ts
+import { readTlsFingerprint } from "@mgpl-diagnostics/security-kit/server";
+
+const tls = readTlsFingerprint({ headers: req.headers, header: "x-ja4", trustedHops: 1 });
+// { kind: "ja4", value: "t13d1516h2_8daaf6152771_e5627efa2ab1" } or null
+```
+
+The adapters take the same option (`fastifySecurity({ trustedHops: 1, tlsFingerprintHeader: "x-ja4" })`)
+and put the result on `security.tlsFingerprint`.
+
+The header gets the same trust model as X-Forwarded-For: it is read **only when `trustedHops` ≥ 1** and a
+header name is configured, because without a trusted proxy any client could send it. The proxy must
+**set** (overwrite) the header on every request, never pass on a value from the client. A value the proxy
+appended to a client's arrives as `"a, b"` and is refused. Missing, malformed or oversized values give
+`null`, never an error: TLS may be terminated by something that does not compute fingerprints.
+
+| Proxy | Set the header (`x-ja4` in these examples) |
+| --- | --- |
+| nginx | needs a JA4 module; with FoxIO's ja4-nginx: `proxy_set_header X-JA4 $http_ssl_ja4;` (`proxy_set_header` replaces a client's value) |
+| Envoy | enable `enable_ja4_fingerprinting` on the `tls_inspector` listener filter, then `request_headers_to_add` `x-ja4: "%TLS_JA4_FINGERPRINT%"` with `append_action: OVERWRITE_IF_EXISTS_OR_ADD` (JA3: `%TLS_JA3_FINGERPRINT%`) |
+| Amazon CloudFront | add `CloudFront-Viewer-JA4-Fingerprint` to the origin request policy, and use that as the header name |
+| Cloudflare (Bot Management) | Transform Rule, *Set* request header `x-ja4` to `cf.bot_management.ja4` |
+
+Prefer JA4: Chrome shuffles its TLS extension order on every connection, so its JA3 changes constantly,
+while JA4 sorts them. A fingerprint changes with browser updates and with middleboxes (corporate TLS
+inspection, some mobile networks), so treat a change as a signal to log, not as proof of theft.
 
 ## Server helpers
 

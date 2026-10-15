@@ -17,6 +17,7 @@ src/browser/             "/browser": storage.ts (web/memory/custom), device.ts (
                          adapters.ts (signalFetch, mergeSignalHeaders, axiosSignals, kySignals, apolloSignals, signalStore)
 src/react.ts             "/react": useDeviceSignals (React is an optional peer)
 src/server/              "/server": signals.ts (readSignals, bindSignals, checkSignals, decide), ip.ts (clientIp),
+                         tls.ts (readTlsFingerprint: JA4/JA3 from a trusted proxy header),
                          headers.ts (securityHeaders, corsPolicy), redact.ts (redact, maskEmail, maskPhone),
                          adapters.ts (requestSecurity, fetchSecurity, expressSecurity, fastifySecurity)
 scripts/test.ts          every part; browser code runs on simulated environments

@@ -1,6 +1,6 @@
 {
   "name": "@mgpl-diagnostics/security-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MGPL Diagnostics security primitives for both sides: device signals (device id, tab id, coarse fingerprint, device info) collected in any frontend and checked on the backend against the session; client IP behind proxies; security and CORS headers; log redaction; random ids, SHA-256 and constant-time compare. Zero dependencies; works with any frontend or backend library (fetch, axios, ky, Apollo, TanStack Query, React, Vue, Svelte, Express, Fastify, Fetch-standard servers).",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",
