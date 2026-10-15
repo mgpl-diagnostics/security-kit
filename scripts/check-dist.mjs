@@ -18,6 +18,7 @@ function walk(file) {
 }
 walk("dist/index.js");
 walk("dist/browser.js");
+walk("dist/react.js");
 if (bad.length) {
   console.error(bad.join("\n"));
   process.exit(1);

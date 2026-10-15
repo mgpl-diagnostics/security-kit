@@ -6,7 +6,7 @@
 Device signals collected in any frontend and checked on the backend, plus the server helpers every
 endpoint needs. Zero dependencies.
 
-![version](https://img.shields.io/badge/version-0.1.0-E9A23B) ![checks](https://img.shields.io/badge/checks-32-14264A) ![dependencies](https://img.shields.io/badge/dependencies-0-14264A)
+![version](https://img.shields.io/badge/version-0.2.0-E9A23B) ![checks](https://img.shields.io/badge/checks-44-14264A) ![dependencies](https://img.shields.io/badge/dependencies-0-14264A)
 
 </div>
 
@@ -21,9 +21,40 @@ npm install @mgpl-diagnostics/security-kit
 | --- | --- | --- |
 | `@mgpl-diagnostics/security-kit` | everywhere (browser, Node.js, workers, React Native) | `DeviceSignals` types, `SIGNALS_HEADER`, `encodeSignals` / `decodeSignals` (validated), `randomId`, `sha256Hex`, `constantTimeEqual`, base64url, `canonicalJson` |
 | `@mgpl-diagnostics/security-kit/browser` | any frontend, any framework | `createSignalCollector`, `deviceInfo`, pluggable storage (`webStorage`, `memoryStorage`, or your own sync/async store) |
-| `@mgpl-diagnostics/security-kit/server` | Node.js ≥ 20 | `readSignals`, `bindSignals`, `checkSignals`, `decide`; `clientIp` behind proxies; `securityHeaders`, `corsPolicy`; `redact`, `maskEmail`, `maskPhone` |
+| `@mgpl-diagnostics/security-kit/server` | Node.js ≥ 20 | `readSignals`, `bindSignals`, `checkSignals`, `decide`; `clientIp` behind proxies; `securityHeaders`, `corsPolicy`; `redact`, `maskEmail`, `maskPhone`; adapters for Express, Fastify and Fetch-standard servers |
+| `@mgpl-diagnostics/security-kit/react` | React ≥ 18 (optional peer) | `useDeviceSignals(collector)` |
 
 Both `/browser` and `/server` re-export the shared entry.
+
+## Works with any library
+
+Nothing here imports a framework. The adapters match each library's hook shape, so they add no
+dependency, and anything not listed uses `collector.headers()` or `subscribe` / `getSnapshot` directly.
+
+| You use | Plug in |
+| --- | --- |
+| `@mgpl-diagnostics/client` | `createMgplGraphQLClient({ headers: () => signals.headers() })` |
+| plain `fetch`, graphql-request, urql, Apollo `HttpLink`, ofetch, wretch | `fetch: signalFetch(signals)` |
+| TanStack Query, SWR, RTK Query, Vue Query | call your client (or `signalFetch(signals)`) inside the query function; nothing else |
+| axios | `axios.interceptors.request.use(axiosSignals(signals))` |
+| ky | `ky.create({ hooks: { beforeRequest: [kySignals(signals)] } })` |
+| Apollo Client | `setContext(apolloSignals(signals))` |
+| graphql-ws, socket.io, Angular `HttpClient`, anything with a headers object | `await mergeSignalHeaders(signals, headers)` |
+| React | `const s = useDeviceSignals(signals)` from `/react` |
+| Svelte | `const store = signalStore(signals)`, then `$store` |
+| Vue | `const s = shallowRef(signals.getSnapshot()); signals.subscribe((v) => (s.value = v))` |
+| Solid, Angular signals, RxJS, MobX | wrap `signals.subscribe` / `signals.getSnapshot` (or `signalStore`) |
+| React Native, Electron, Capacitor | pass `storage` / `environment` (see below) |
+
+| Server | Plug in |
+| --- | --- |
+| Fastify | `await app.register(fastifySecurity({ cors: { origins }, trustedHops: 1 }))` → `request.security` |
+| Express, Connect, node:http | `app.use(expressSecurity({ cors: { origins } }))` → `req.security` |
+| Hono, Next.js route handlers, Bun, Deno, workers, GraphQL Yoga | `fetchSecurity(opts).handle(request, remoteAddress)` → `{ security, headers, preflight }` |
+| anything else, or a GraphQL context | `requestSecurity({ headers, remoteAddress, trustedHops })` → `{ ip, signals, userAgent, origin }` |
+
+`security.signals` is already validated (or `null`). Leave `cors` unset when another plugin
+(`@fastify/cors`, Yoga's own CORS) already handles it.
 
 ## Device signals
 
@@ -133,7 +164,7 @@ logger.info(redact({ body, headers })); // passwords, tokens, cookies, keys → 
 
 ```bash
 npm run typecheck   # also checks that the shared and browser parts compile without Node.js types
-npm test            # 32 checks
+npm test            # 44 checks, including real Express and Fastify apps
 npm run build && node scripts/check-dist.mjs
 npm run llms        # regenerate llms-full.txt (CI fails when it is stale)
 ```

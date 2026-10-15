@@ -13,9 +13,12 @@ src/shared/constants.ts  SIGNALS_HEADER ("x-mgpl-signals"), SIGNAL_LIMITS, ID_PA
 src/shared/crypto.ts     base64url, randomBytes/randomId, sha256Hex, constantTimeEqual, canonicalJson (Web Crypto only)
 src/shared/signals.ts    encodeSignals, signalHeaders, parseSignals/decodeSignals (validate untrusted input)
 src/browser/             "/browser": storage.ts (web/memory/custom), device.ts (deviceInfo, fingerprint inputs),
-                         collect.ts (createSignalCollector)
+                         collect.ts (createSignalCollector: collect, headers, subscribe/getSnapshot),
+                         adapters.ts (signalFetch, mergeSignalHeaders, axiosSignals, kySignals, apolloSignals, signalStore)
+src/react.ts             "/react": useDeviceSignals (React is an optional peer)
 src/server/              "/server": signals.ts (readSignals, bindSignals, checkSignals, decide), ip.ts (clientIp),
-                         headers.ts (securityHeaders, corsPolicy), redact.ts (redact, maskEmail, maskPhone)
+                         headers.ts (securityHeaders, corsPolicy), redact.ts (redact, maskEmail, maskPhone),
+                         adapters.ts (requestSecurity, fetchSecurity, expressSecurity, fastifySecurity)
 scripts/test.ts          every part; browser code runs on simulated environments
 scripts/check-dist.mjs   the built main and /browser bundles import no Node.js modules
 ```
@@ -25,7 +28,10 @@ scripts/check-dist.mjs   the built main and /browser bundles import no Node.js m
 1. **The shared and browser parts use no Node.js APIs** (no `node:*`, no `Buffer`): only Web Crypto,
    `TextEncoder`, `btoa`/`atob`. `npm run typecheck` compiles them without `@types/node`, and CI runs
    `scripts/check-dist.mjs` on the bundles.
-2. **No runtime dependencies.** Frameworks (React, TanStack Query, Fastify…) stay in the consumers.
+2. **No runtime dependencies; works with every library.** Adapters match a library's hook shape
+   structurally and never import it (axios, ky, Apollo, Express, Fastify…). React is the one optional
+   peer, used only by `/react`. Prefer a generic contract (`fetch`, headers, `subscribe`/`getSnapshot`)
+   over a new per-library adapter, and test every adapter (a real Express and Fastify app in `npm test`).
 3. **Signals stay coarse.** No canvas, audio, WebGL, font or IP probing, nothing sent to third parties.
    Anything new that is collected goes in the README table "What is collected" in the same PR.
 4. **Never store raw ids or tokens.** The server keeps `bindSignals()` output (SHA-256 of ids).

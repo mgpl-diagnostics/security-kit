@@ -29,6 +29,16 @@ export interface SignalCollector {
   refresh(): Promise<DeviceSignals>;
   /** Forgets the device and tab ids (for "forget this device" or after a sign-out on a shared PC). */
   reset(): Promise<void>;
+  /**
+   * The last collected signals, or null before the first `collect()`. The same object until the
+   * signals change, so it works as a snapshot for React's useSyncExternalStore and similar.
+   */
+  getSnapshot(): DeviceSignals | null;
+  /**
+   * Calls `listener` whenever the signals change (first collect, refresh, reset). Returns the
+   * unsubscribe function. Fits any reactive library: React, Vue, Svelte, Solid, Angular signals, RxJS.
+   */
+  subscribe(listener: (signals: DeviceSignals | null) => void): () => void;
 }
 
 /**
@@ -44,6 +54,19 @@ export function createSignalCollector(o: SignalCollectorOptions = {}): SignalCol
   const prefix = o.prefix ?? "mgpl.";
   const env = o.environment ?? defaultEnvironment;
   let cached: Promise<DeviceSignals> | null = null;
+  let snapshot: DeviceSignals | null = null;
+  let generation = 0;
+  const listeners = new Set<(signals: DeviceSignals | null) => void>();
+  const publish = (next: DeviceSignals | null) => {
+    snapshot = next;
+    for (const l of [...listeners]) {
+      try {
+        l(next);
+      } catch {
+        /* a listener's error must not break collection */
+      }
+    }
+  };
 
   async function idFrom(store: SignalStorage, key: string): Promise<string> {
     const existing = await store.get(prefix + key);
@@ -64,10 +87,20 @@ export function createSignalCollector(o: SignalCollectorOptions = {}): SignalCol
   }
 
   const collect = () => {
-    cached ??= build().catch((err) => {
-      cached = null; // retry next time
-      throw err;
-    });
+    if (!cached) {
+      const gen = generation;
+      cached = build().then(
+        (signals) => {
+          // a refresh() or reset() during the build makes this result stale
+          if (gen === generation && signals !== snapshot) publish(signals);
+          return signals;
+        },
+        (err) => {
+          if (gen === generation) cached = null; // retry next time
+          throw err;
+        },
+      );
+    }
     return cached;
   };
 
@@ -76,13 +109,21 @@ export function createSignalCollector(o: SignalCollectorOptions = {}): SignalCol
     headers: async () => signalHeaders(await collect()),
     headerValue: async () => encodeSignals(await collect()),
     refresh() {
+      generation++;
       cached = null;
       return collect();
     },
     async reset() {
+      generation++;
       cached = null;
       await storage.remove?.(prefix + "deviceId");
       await tabStorage.remove?.(prefix + "tabId");
+      publish(null);
+    },
+    getSnapshot: () => snapshot,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
     },
   };
 }
