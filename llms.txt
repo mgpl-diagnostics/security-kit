@@ -4,9 +4,10 @@
 
 Key facts for agents:
 - Works with any library: browser adapters signalFetch, mergeSignalHeaders, axiosSignals, kySignals, apolloSignals, signalStore, and collector.subscribe/getSnapshot; "./react" useDeviceSignals; server adapters requestSecurity, fetchSecurity, expressSecurity, fastifySecurity. No adapter imports its library.
-- Entries: "." (shared: types, encode/decode, randomId, sha256Hex, constantTimeEqual), "./browser" (createSignalCollector, deviceInfo, storages), "./server" (readSignals, bindSignals, checkSignals, decide, clientIp, securityHeaders, corsPolicy, redact, maskEmail, maskPhone).
+- Entries: "." (shared: types, encode/decode, randomId, sha256Hex, constantTimeEqual), "./browser" (createSignalCollector, deviceInfo, storages), "./server" (readSignals, bindSignals, checkSignals, decide, clientIp, readTlsFingerprint, securityHeaders, corsPolicy, redact, maskEmail, maskPhone).
 - The shared and browser parts use no Node.js APIs (checked by typecheck and scripts/check-dist.mjs).
 - decodeSignals / readSignals never throw and return null for anything malformed or oversized.
+- readTlsFingerprint reads a JA4/JA3 TLS fingerprint from a header the TLS-terminating proxy sets, only when trustedHops >= 1 and a header name is configured (same trust model as X-Forwarded-For); null otherwise, never throws.
 - Token and session logic stays in auth-kit; security-kit only supplies signals and helpers.
 
 ## Docs
@@ -25,6 +26,7 @@ Key facts for agents:
 - [src/browser/device.ts](src/browser/device.ts): device info and fingerprint inputs
 - [src/server/signals.ts](src/server/signals.ts): readSignals, bindSignals, checkSignals, decide
 - [src/server/ip.ts](src/server/ip.ts): clientIp
+- [src/server/tls.ts](src/server/tls.ts): readTlsFingerprint, parseTlsFingerprint
 - [src/server/headers.ts](src/server/headers.ts): securityHeaders, corsPolicy
 - [src/server/redact.ts](src/server/redact.ts): redact, maskEmail, maskPhone
 - [scripts/test.ts](scripts/test.ts): all checks

@@ -7,6 +7,7 @@ import type { DeviceSignals } from "../shared/types";
 import { corsPolicy, securityHeaders, type CorsOptions, type SecurityHeaderOptions } from "./headers";
 import { clientIp } from "./ip";
 import { headerValue, readSignals, type HeaderSource } from "./signals";
+import { readTlsFingerprint, type TlsFingerprint } from "./tls";
 
 export interface RequestSecurity {
   /** Client IP (see clientIp and `trustedHops`). */
@@ -15,6 +16,8 @@ export interface RequestSecurity {
   signals: DeviceSignals | null;
   userAgent: string | null;
   origin: string | null;
+  /** TLS client fingerprint from the trusted proxy's header (see readTlsFingerprint), or null. */
+  tlsFingerprint: TlsFingerprint | null;
 }
 
 export interface SecurityOptions {
@@ -24,15 +27,18 @@ export interface SecurityOptions {
   cors?: CorsOptions | false;
   /** Reverse proxies that append to X-Forwarded-For. Default 0. */
   trustedHops?: number;
+  /** Header the TLS-terminating proxy puts the JA4/JA3 fingerprint in (e.g. "x-ja4"). Read only when trustedHops ≥ 1. */
+  tlsFingerprintHeader?: string;
 }
 
 /** IP, signals, user agent and origin of any request. Use it to build a GraphQL context. */
-export function requestSecurity(input: { headers?: HeaderSource; remoteAddress?: string | null; trustedHops?: number }): RequestSecurity {
+export function requestSecurity(input: { headers?: HeaderSource; remoteAddress?: string | null; trustedHops?: number; tlsFingerprintHeader?: string }): RequestSecurity {
   return {
     ip: clientIp(input),
     signals: readSignals(input.headers),
     userAgent: headerValue(input.headers, "user-agent")?.slice(0, 512) ?? null,
     origin: headerValue(input.headers, "origin") ?? null,
+    tlsFingerprint: readTlsFingerprint({ headers: input.headers, header: input.tlsFingerprintHeader, trustedHops: input.trustedHops }),
   };
 }
 
@@ -63,7 +69,7 @@ export function fetchSecurity(o: SecurityOptions = {}) {
   const p = prepare(o);
   return {
     handle(request: Request, remoteAddress?: string | null) {
-      const security = requestSecurity({ headers: request.headers, remoteAddress, trustedHops: o.trustedHops });
+      const security = requestSecurity({ headers: request.headers, remoteAddress, trustedHops: o.trustedHops, tlsFingerprintHeader: o.tlsFingerprintHeader });
       const pre = p.isPreflight(request.method, request.headers);
       const headers = p.headers(security.origin, pre);
       return { security, headers, preflight: pre ? new Response(null, { status: 204, headers }) : null };
@@ -101,7 +107,7 @@ interface NodeLikeResponse {
 export function expressSecurity(o: SecurityOptions = {}) {
   const p = prepare(o);
   return (req: NodeLikeRequest, res: NodeLikeResponse, next: (err?: unknown) => void) => {
-    const security = requestSecurity({ headers: req.headers, remoteAddress: req.socket?.remoteAddress, trustedHops: o.trustedHops });
+    const security = requestSecurity({ headers: req.headers, remoteAddress: req.socket?.remoteAddress, trustedHops: o.trustedHops, tlsFingerprintHeader: o.tlsFingerprintHeader });
     req.security = security;
     const pre = p.isPreflight(req.method, req.headers);
     for (const [k, v] of Object.entries(p.headers(security.origin, pre))) res.setHeader(k, v);
@@ -142,7 +148,7 @@ export function fastifySecurity(o: SecurityOptions = {}) {
     app.decorateRequest("security", null);
     app.addHook("onRequest", async (request, reply) => {
       const remoteAddress = request.socket?.remoteAddress ?? request.raw?.socket?.remoteAddress;
-      const security = requestSecurity({ headers: request.headers, remoteAddress, trustedHops: o.trustedHops });
+      const security = requestSecurity({ headers: request.headers, remoteAddress, trustedHops: o.trustedHops, tlsFingerprintHeader: o.tlsFingerprintHeader });
       request.security = security;
       const pre = p.isPreflight(request.method, request.headers);
       for (const [k, v] of Object.entries(p.headers(security.origin, pre))) reply.header(k, v);

@@ -12,6 +12,7 @@ export {
   type SignalPolicy,
   type SignalVerdict,
 } from "./signals";
+export { parseTlsFingerprint, readTlsFingerprint, type TlsFingerprint, type TlsFingerprintKind, type TlsFingerprintOptions } from "./tls";
 export { clientIp, normalizeIp, type ClientIpOptions } from "./ip";
 export { API_CSP, corsPolicy, securityHeaders, type CorsOptions, type SecurityHeaderOptions } from "./headers";
 export { maskEmail, maskPhone, REDACTED, redact, SENSITIVE_KEYS, type RedactOptions } from "./redact";

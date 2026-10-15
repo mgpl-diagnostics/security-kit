@@ -524,12 +524,39 @@ const sigValue = encodeSignals(good);
 
 await check("requestSecurity", () => {
   const r = requestSecurity({ headers: { "x-mgpl-signals": sigValue, "user-agent": "UA", origin: "https://a.b" }, remoteAddress: "::ffff:10.1.1.1" });
-  eq(r, { ip: "10.1.1.1", signals: good, userAgent: "UA", origin: "https://a.b" });
+  eq(r, { ip: "10.1.1.1", signals: good, userAgent: "UA", origin: "https://a.b", tlsFingerprint: null });
+});
+
+// ---------- server: TLS fingerprint from the proxy ----------
+
+const { parseTlsFingerprint, readTlsFingerprint } = await import("../src/server/index");
+const ja4 = "t13d1516h2_8daaf6152771_e5627efa2ab1";
+const ja3 = "773906b0efdefa24a7f2b8eb6985bf37";
+
+await check("parseTlsFingerprint: JA4, JA3, other forms; rejects junk", () => {
+  eq(parseTlsFingerprint(ja4), { kind: "ja4", value: ja4 });
+  eq(parseTlsFingerprint(` ${ja4.toUpperCase()} `), { kind: "ja4", value: ja4 });
+  eq(parseTlsFingerprint("q13i0310h3_55b375c5d22e_cd85d2d88918"), { kind: "ja4", value: "q13i0310h3_55b375c5d22e_cd85d2d88918" });
+  eq(parseTlsFingerprint(ja3.toUpperCase()), { kind: "ja3", value: ja3 });
+  eq(parseTlsFingerprint("771,4865-4866,0-23-65281,29-23,0"), { kind: "other", value: "771,4865-4866,0-23-65281,29-23,0" });
+  for (const bad of [undefined, null, "", "short", "has space here", "<script>", `${ja4}, ${ja4}`, "x".repeat(257)]) eq(parseTlsFingerprint(bad), null);
+});
+await check("readTlsFingerprint only through a trusted proxy and a configured header", () => {
+  const headers = { "X-JA4": ja4 };
+  eq(readTlsFingerprint({ headers, header: "x-ja4", trustedHops: 1 }), { kind: "ja4", value: ja4 });
+  eq(readTlsFingerprint({ headers: new Headers(headers), header: "X-Ja4", trustedHops: 2 }), { kind: "ja4", value: ja4 });
+  eq(readTlsFingerprint({ headers, header: "x-ja4" }), null); // no trusted proxy: any client could send it
+  eq(readTlsFingerprint({ headers, header: "x-ja4", trustedHops: 0 }), null);
+  eq(readTlsFingerprint({ headers, trustedHops: 1 }), null); // no header configured
+  eq(readTlsFingerprint({ headers: {}, header: "x-ja4", trustedHops: 1 }), null); // TLS ended elsewhere
+  // a client value the proxy appended to instead of replacing arrives joined ("a, b") and is refused
+  eq(readTlsFingerprint({ headers: { "x-ja4": `${ja4}, ${ja4}` }, header: "x-ja4", trustedHops: 1 }), null);
 });
 await check("fetchSecurity: info, headers, preflight, apply", () => {
-  const sec = fetchSecurity({ cors: { origins: ["https://lab.example.in"] }, trustedHops: 1 });
-  const r = sec.handle(new Request("https://api/graphql", { method: "POST", headers: { origin: "https://lab.example.in", "x-forwarded-for": "203.0.113.9", [SIGNALS_HEADER]: sigValue } }), "10.0.0.2");
+  const sec = fetchSecurity({ cors: { origins: ["https://lab.example.in"] }, trustedHops: 1, tlsFingerprintHeader: "x-ja4" });
+  const r = sec.handle(new Request("https://api/graphql", { method: "POST", headers: { origin: "https://lab.example.in", "x-forwarded-for": "203.0.113.9", "x-ja4": ja4, [SIGNALS_HEADER]: sigValue } }), "10.0.0.2");
   eq(r.security.ip, "203.0.113.9");
+  eq(r.security.tlsFingerprint, { kind: "ja4", value: ja4 });
   eq(r.security.signals, good);
   eq(r.preflight, null);
   eq(r.headers["access-control-allow-origin"], "https://lab.example.in");
@@ -573,9 +600,10 @@ await check("fastifySecurity on a real Fastify app (applies outside its plugin s
   app.post("/graphql", async (req) => (req as unknown as { security: unknown }).security);
   try {
     const res = await app.inject({ method: "POST", url: "/graphql", headers: { origin: "https://panel.mgpl.example", [SIGNALS_HEADER]: sigValue }, payload: {} });
-    const body = res.json() as { signals: DeviceSignals; ip: string };
+    const body = res.json() as { signals: DeviceSignals; ip: string; tlsFingerprint: unknown };
     eq(body.signals, good);
     eq(body.ip, "127.0.0.1");
+    eq(body.tlsFingerprint, null);
     eq(res.headers["access-control-allow-origin"], "https://panel.mgpl.example");
     eq(res.headers["strict-transport-security"], undefined);
     eq(res.headers["x-frame-options"], "DENY");
@@ -583,6 +611,20 @@ await check("fastifySecurity on a real Fastify app (applies outside its plugin s
     eq(pre.statusCode, 204);
   } finally {
     await app.close();
+  }
+});
+await check("fastifySecurity reads the TLS fingerprint only when the proxy is trusted", async () => {
+  const Fastify = (await import("fastify")).default;
+  for (const [trustedHops, want] of [[1, { kind: "ja3", value: ja3 }], [0, null]] as const) {
+    const app = Fastify();
+    await app.register(fastifySecurity({ trustedHops, tlsFingerprintHeader: "x-ja3" }));
+    app.post("/graphql", async (req) => (req as unknown as { security: unknown }).security);
+    try {
+      const res = await app.inject({ method: "POST", url: "/graphql", headers: { "x-ja3": ja3, "x-forwarded-for": "203.0.113.9" }, payload: {} });
+      eq((res.json() as { tlsFingerprint: unknown }).tlsFingerprint, want);
+    } finally {
+      await app.close();
+    }
   }
 });
 
